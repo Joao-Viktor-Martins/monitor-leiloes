@@ -660,8 +660,16 @@ def main():
         # fecha automaticamente qualquer popup/aba nova que abrir sozinha
         # (proteção contra os redirecionamentos automáticos observados em
         # alguns desses sites)
-        context.on("page", lambda p_extra: (p_extra.close() if p_extra != page else None))
         page = context.new_page()
+
+        def fechar_popup_extra(pagina_nova):
+            if pagina_nova != page:
+                try:
+                    pagina_nova.close()
+                except Exception:
+                    pass
+
+        context.on("page", fechar_popup_extra)
         page.set_extra_http_headers({"Accept-Language": "pt-BR,pt;q=0.9"})
 
         # --- Veículos: sites com busca por termo (roda uma vez por modelo) ---
