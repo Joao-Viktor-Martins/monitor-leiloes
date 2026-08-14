@@ -1,0 +1,39 @@
+name: Checar leilões
+
+on:
+  schedule:
+    # toda segunda-feira às 12:00 UTC (~09:00 no horário de Brasília)
+    - cron: '0 12 * * 1'
+  workflow_dispatch: {}  # permite rodar manualmente pela aba "Actions" do GitHub
+
+permissions:
+  contents: write
+
+jobs:
+  checar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Baixar o repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Rodar a checagem dos leilões
+        run: python scraper.py
+
+      - name: Publicar resultado (commit em docs/)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/
+          git diff --staged --quiet || git commit -m "Atualiza relatório de leilões ($(date -u +'%Y-%m-%d %H:%M UTC'))"
+          git push
