@@ -88,6 +88,7 @@ AVISOS IMPORTANTES:
 """
 
 import argparse
+import html
 import json
 import re
 import sys
@@ -711,94 +712,289 @@ def salvar_vistos(vistos):
     STATE_FILE.write_text(json.dumps(sorted(vistos), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def esc(valor):
+    """Escapa texto pra não quebrar o HTML (títulos/locais vêm direto dos sites)."""
+    return html.escape(str(valor)) if valor is not None else ""
+
+
 def gerar_relatorio_html(itens, novos_ids):
     sites = sorted({it["site"] for it in itens})
-    categorias = sorted({it.get("categoria", "") for it in itens})
+    categorias = sorted({it.get("categoria", "") for it in itens if it.get("categoria")})
     novos_count = sum(1 for it in itens if f"{it['site']}|{it.get('categoria','')}|{it['id']}" in novos_ids)
     oportunidades_count = sum(1 for it in itens if eh_oportunidade(it))
 
+    # --- contagens pra estatísticas/gráficos simples (mais informação) ---
+    contagem_site = {}
+    contagem_categoria = {}
+    for it in itens:
+        contagem_site[it["site"]] = contagem_site.get(it["site"], 0) + 1
+        cat = it.get("categoria") or "Outros"
+        contagem_categoria[cat] = contagem_categoria.get(cat, 0) + 1
+    max_site = max(contagem_site.values()) if contagem_site else 1
+
+    barras_site = "".join(
+        f'<div class="barra-linha"><span class="barra-label">{esc(site)}</span>'
+        f'<div class="barra-fundo"><div class="barra-preenchida" style="width:{max(6, round(qtd / max_site * 100))}%"></div></div>'
+        f'<span class="barra-valor">{qtd}</span></div>'
+        for site, qtd in sorted(contagem_site.items(), key=lambda x: -x[1])
+    )
+    chips_categoria = "".join(
+        f'<span class="chip">{esc(cat)} <b>{qtd}</b></span>'
+        for cat, qtd in sorted(contagem_categoria.items(), key=lambda x: -x[1])
+    )
+
+    # --- cards de destaque: oportunidades novas primeiro, depois maior desconto ---
+    destaques = [it for it in itens if eh_oportunidade(it)]
+
+    def chave_destaque(it):
+        chave = f"{it['site']}|{it.get('categoria','')}|{it['id']}"
+        eh_novo = chave in novos_ids
+        desconto = it.get("desconto_pct") or 0
+        preco_num = parse_preco(it.get("preco")) or 0
+        return (0 if eh_novo else 1, -desconto, preco_num)
+
+    destaques.sort(key=chave_destaque)
+    destaques_top = destaques[:12]
+
+    def render_card(it):
+        chave = f"{it['site']}|{it.get('categoria','')}|{it['id']}"
+        eh_novo = chave in novos_ids
+        desconto = it.get("desconto_pct")
+        tag_desconto = f'<span class="tag-desconto">-{desconto:.0f}% na 2ª praça</span>' if desconto else ""
+        tag_novo = '<span class="tag-novo">NOVO</span>' if eh_novo else ""
+        if it.get("url"):
+            link_html = f'<a class="btn-ver" href="{esc(it["url"])}" target="_blank">Ver lote →</a>'
+        else:
+            link_html = f'<span class="btn-ver-disabled">busque "{esc(it["id"])}" no site</span>'
+        return f"""<div class="card-oport">
+  <div class="card-oport-topo"><span class="card-site">{esc(it['site'])}</span>{tag_novo}</div>
+  <div class="card-titulo">{esc(it['titulo'])}</div>
+  <div class="card-preco">{esc(it.get('preco') or '-')} {tag_desconto}</div>
+  <div class="card-rodape"><span class="card-local">📍 {esc(it.get('local') or it.get('categoria',''))}</span>{link_html}</div>
+</div>"""
+
+    cards_html = "".join(render_card(it) for it in destaques_top)
+    aviso_mais_oport = (
+        f'<p class="ver-mais-aviso">+ {len(destaques) - len(destaques_top)} outra(s) oportunidade(s) — use o filtro 🔥 abaixo pra ver todas.</p>'
+        if len(destaques) > len(destaques_top) else ""
+    )
+
+    # --- linhas da tabela completa ---
     linhas = []
     for it in itens:
         chave = f"{it['site']}|{it.get('categoria','')}|{it['id']}"
         eh_novo = chave in novos_ids
         eh_oport = eh_oportunidade(it)
-        link = f'<a href="{it["url"]}" target="_blank">abrir</a>' if it.get("url") else f'(busque "{it["id"]}" no site)'
+        link = f'<a href="{esc(it["url"])}" target="_blank">abrir ↗</a>' if it.get("url") else f'(busque "{esc(it["id"])}" no site)'
         badges = ""
         if eh_oport:
             badges += ' <span class="oportunidade">🔥 OPORTUNIDADE</span>'
         if eh_novo:
             badges += ' <span class="novo">NOVO</span>'
+        preco_num = parse_preco(it.get("preco"))
+        desconto = it.get("desconto_pct")
+        desconto_txt = f"↓{desconto:.0f}%" if desconto else "-"
         linhas.append(
-            f'<tr data-site="{it["site"]}" data-categoria="{it.get("categoria","")}" '
-            f'data-novo="{"1" if eh_novo else "0"}" data-oportunidade="{"1" if eh_oport else "0"}">'
-            f"<td>{it['site']}</td><td>{it.get('categoria','')}</td><td>{it['titulo']}{badges}</td>"
-            f"<td>{it.get('preco') or '-'}</td><td>{it.get('condicao') or '-'}</td>"
-            f"<td>{it.get('local') or '-'}</td><td>{link}</td>"
+            f'<tr data-site="{esc(it["site"])}" data-categoria="{esc(it.get("categoria",""))}" '
+            f'data-novo="{"1" if eh_novo else "0"}" data-oportunidade="{"1" if eh_oport else "0"}" '
+            f'data-preco="{preco_num if preco_num is not None else -1}" '
+            f'data-desconto="{desconto if desconto is not None else -1}" '
+            f'data-titulo="{esc(it["titulo"]).lower()}">'
+            f'<td data-label="Site">{esc(it["site"])}</td><td data-label="Categoria">{esc(it.get("categoria",""))}</td>'
+            f'<td data-label="Título">{esc(it["titulo"])}{badges}</td>'
+            f'<td data-label="Preço">{esc(it.get("preco") or "-")}</td>'
+            f'<td data-label="Desconto">{desconto_txt}</td>'
+            f'<td data-label="Condição">{esc(it.get("condicao") or "-")}</td>'
+            f'<td data-label="Local">{esc(it.get("local") or "-")}</td><td data-label="Link">{link}</td>'
             "</tr>"
         )
 
-    opcoes_site = "".join(f'<option value="{s}">{s}</option>' for s in sites)
-    opcoes_cat = "".join(f'<option value="{c}">{c}</option>' for c in categorias if c)
+    opcoes_site = "".join(f'<option value="{esc(s)}">{esc(s)}</option>' for s in sites)
+    opcoes_cat = "".join(f'<option value="{esc(c)}">{esc(c)}</option>' for c in categorias)
 
-    html = f"""<!DOCTYPE html>
+    documento = f"""<!DOCTYPE html>
 <html lang="pt-BR"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Monitor de Leilões</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔨</text></svg>">
 <style>
-body {{ font-family: -apple-system, Segoe UI, Arial, sans-serif; background:#f7f7f8; margin:0; padding:24px; color:#1a1a1a; }}
-h1 {{ font-size: 20px; }}
-table {{ width:100%; border-collapse: collapse; background:#fff; border-radius:8px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.1); }}
-th, td {{ text-align:left; padding:10px 12px; border-bottom:1px solid #eee; font-size:14px; }}
-th {{ background:#111; color:#fff; }}
-tr:hover {{ background:#fafafa; }}
-.meta {{ color:#666; font-size:13px; margin-bottom:16px; }}
-.filtros {{ margin-bottom:16px; display:flex; gap:12px; flex-wrap:wrap; }}
-.filtros select, .filtros label {{ padding:6px 10px; border-radius:6px; border:1px solid #ccc; font-size:14px; background:#fff; }}
-.novo {{ background:#e6f4ea; color:#1a7f37; font-size:11px; font-weight:600; padding:2px 6px; border-radius:4px; }}
-.oportunidade {{ background:#fff1e0; color:#b3540a; font-size:11px; font-weight:600; padding:2px 6px; border-radius:4px; }}
-@media (max-width: 700px) {{
+:root {{
+  --bg:#f4f5f7; --card:#fff; --texto:#1a1a1a; --sutil:#6b7280; --borda:#e8e9ec;
+  --laranja:#e8590c; --laranja-bg:#fff1e6; --verde:#1a7f37; --verde-bg:#e6f4ea;
+  --azul-escuro:#0f172a; --azul-escuro2:#1e2b4d;
+}}
+* {{ box-sizing:border-box; }}
+body {{ font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif; background:var(--bg); margin:0; color:var(--texto); }}
+a {{ color:var(--laranja); }}
+.topo {{ background:linear-gradient(135deg,var(--azul-escuro),var(--azul-escuro2)); color:#fff; padding:28px 24px 60px; }}
+.topo h1 {{ margin:0 0 4px; font-size:24px; display:flex; align-items:center; gap:10px; }}
+.topo .subtitulo {{ color:#c7cede; font-size:13.5px; margin:0; }}
+.container {{ max-width:1180px; margin:0 auto; padding:0 20px; }}
+.stats {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; margin-top:-40px; }}
+.stat-card {{ background:var(--card); border-radius:12px; padding:16px 18px; box-shadow:0 4px 14px rgba(15,23,42,.1); }}
+.stat-card .valor {{ font-size:26px; font-weight:700; line-height:1.1; }}
+.stat-card .rotulo {{ color:var(--sutil); font-size:12.5px; margin-top:2px; }}
+.stat-card.oportunidade .valor {{ color:var(--laranja); }}
+.stat-card.novo .valor {{ color:var(--verde); }}
+.secao {{ margin-top:32px; }}
+.secao h2 {{ font-size:16px; margin:0 0 12px; display:flex; align-items:center; gap:8px; }}
+.grid-destaques {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:14px; }}
+.card-oport {{ background:var(--card); border:1px solid var(--borda); border-left:4px solid var(--laranja); border-radius:10px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,.05); display:flex; flex-direction:column; gap:6px; }}
+.card-oport-topo {{ display:flex; justify-content:space-between; align-items:center; }}
+.card-site {{ font-size:11.5px; color:var(--sutil); text-transform:uppercase; letter-spacing:.03em; }}
+.card-titulo {{ font-weight:600; font-size:14.5px; line-height:1.35; min-height:38px; }}
+.card-preco {{ font-size:17px; font-weight:700; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
+.card-rodape {{ display:flex; justify-content:space-between; align-items:center; margin-top:4px; font-size:12.5px; }}
+.card-local {{ color:var(--sutil); }}
+.btn-ver {{ background:var(--azul-escuro); color:#fff !important; text-decoration:none; padding:6px 12px; border-radius:6px; font-size:12.5px; font-weight:600; white-space:nowrap; }}
+.btn-ver-disabled {{ color:var(--sutil); font-size:11.5px; }}
+.tag-desconto {{ background:var(--laranja-bg); color:var(--laranja); font-size:11px; font-weight:700; padding:2px 7px; border-radius:20px; }}
+.tag-novo {{ background:var(--verde-bg); color:var(--verde); font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:20px; }}
+.ver-mais-aviso {{ color:var(--sutil); font-size:13px; margin-top:10px; }}
+.painel {{ display:grid; grid-template-columns:1.3fr 1fr; gap:16px; }}
+@media (max-width:800px) {{ .painel {{ grid-template-columns:1fr; }} }}
+.caixa {{ background:var(--card); border:1px solid var(--borda); border-radius:10px; padding:16px 18px; }}
+.caixa h3 {{ margin:0 0 12px; font-size:13.5px; color:var(--sutil); text-transform:uppercase; letter-spacing:.03em; }}
+.barra-linha {{ display:grid; grid-template-columns:130px 1fr 32px; align-items:center; gap:8px; font-size:13px; margin-bottom:8px; }}
+.barra-label {{ color:var(--texto); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+.barra-fundo {{ background:#eef0f3; border-radius:6px; height:9px; overflow:hidden; }}
+.barra-preenchida {{ background:linear-gradient(90deg,#f59f00,var(--laranja)); height:100%; border-radius:6px; }}
+.barra-valor {{ color:var(--sutil); text-align:right; }}
+.chip {{ display:inline-block; background:#eef0f3; border-radius:20px; padding:5px 12px; font-size:12.5px; margin:0 6px 6px 0; }}
+.chip b {{ color:var(--laranja); }}
+.filtros {{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:18px 0 14px; }}
+.filtros select, .filtros input[type=text] {{ padding:8px 12px; border-radius:8px; border:1px solid var(--borda); font-size:13.5px; background:#fff; }}
+.filtros input[type=text] {{ min-width:200px; }}
+.pill {{ padding:8px 14px; border-radius:20px; border:1px solid var(--borda); font-size:13px; cursor:pointer; background:#fff; user-select:none; }}
+.pill input {{ margin-right:6px; }}
+.pill.ativo {{ background:var(--azul-escuro); color:#fff; border-color:var(--azul-escuro); }}
+.tabela-wrap {{ background:var(--card); border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.08); border:1px solid var(--borda); }}
+table {{ width:100%; border-collapse:collapse; }}
+th, td {{ text-align:left; padding:11px 13px; border-bottom:1px solid var(--borda); font-size:13.5px; }}
+th {{ background:#fafbfc; color:var(--sutil); font-size:11.5px; text-transform:uppercase; letter-spacing:.03em; cursor:pointer; white-space:nowrap; }}
+th:hover {{ color:var(--texto); }}
+tbody tr:hover {{ background:#fafbfc; }}
+.novo {{ background:var(--verde-bg); color:var(--verde); font-size:10.5px; font-weight:700; padding:2px 6px; border-radius:4px; margin-left:4px; }}
+.oportunidade {{ background:var(--laranja-bg); color:var(--laranja); font-size:10.5px; font-weight:700; padding:2px 6px; border-radius:4px; margin-left:4px; }}
+.rodape {{ color:var(--sutil); font-size:12.5px; text-align:center; margin:32px 0 40px; line-height:1.8; }}
+.rodape a {{ color:var(--sutil); text-decoration:underline; }}
+.vazio {{ text-align:center; color:var(--sutil); padding:30px !important; }}
+@media (max-width:700px) {{
   table, thead, tbody, th, td, tr {{ display:block; }}
-  th {{ display:none; }}
-  tr {{ background:#fff; border-radius:8px; margin-bottom:10px; padding:8px 12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }}
+  thead {{ display:none; }}
+  tr {{ background:#fff; border-radius:10px; margin:10px; padding:10px 14px; box-shadow:0 1px 3px rgba(0,0,0,.08); }}
+  .tabela-wrap {{ background:transparent; box-shadow:none; border:none; }}
   td {{ border:none; padding:4px 0; }}
-  td:before {{ content: attr(data-label); font-weight:600; display:block; font-size:11px; color:#888; }}
+  td:before {{ content:attr(data-label); font-weight:600; display:block; font-size:11px; color:var(--sutil); }}
 }}
 </style></head>
 <body>
-<h1>Monitor de Leilões</h1>
-<div class="meta">Atualizado em {datetime.now().strftime('%d/%m/%Y %H:%M')} UTC · {len(itens)} lote(s) no total · {novos_count} novo(s) · 🔥 {oportunidades_count} oportunidade(s) (desconto ≥{DESCONTO_MINIMO_OPORTUNIDADE}% na 2ª praça ou preço abaixo do limite da categoria) · atualiza automaticamente toda semana</div>
-<div class="filtros">
-  <select id="filtroSite"><option value="">Todos os sites</option>{opcoes_site}</select>
-  <select id="filtroCategoria"><option value="">Todas as categorias</option>{opcoes_cat}</select>
-  <label><input type="checkbox" id="filtroNovos"> só novidades</label>
-  <label><input type="checkbox" id="filtroOportunidades"> 🔥 só oportunidades</label>
+<div class="topo"><div class="container">
+  <h1>🔨 Monitor de Leilões</h1>
+  <p class="subtitulo">Atualizado em {datetime.now().strftime('%d/%m/%Y às %H:%M')} UTC · {len(sites)} leiloeiro(s) monitorado(s) · atualiza sozinho toda segunda-feira</p>
+</div></div>
+<div class="container">
+  <div class="stats">
+    <div class="stat-card"><div class="valor">{len(itens)}</div><div class="rotulo">lotes no total</div></div>
+    <div class="stat-card novo"><div class="valor">{novos_count}</div><div class="rotulo">novos desde a última vez</div></div>
+    <div class="stat-card oportunidade"><div class="valor">🔥 {oportunidades_count}</div><div class="rotulo">oportunidades ativas</div></div>
+    <div class="stat-card"><div class="valor">{len(sites)}</div><div class="rotulo">sites ativos</div></div>
+    <div class="stat-card"><div class="valor">{len(categorias)}</div><div class="rotulo">categorias</div></div>
+  </div>
+
+  <div class="secao">
+    <h2>🔥 Oportunidades em destaque</h2>
+    {'<div class="grid-destaques">' + cards_html + '</div>' + aviso_mais_oport if destaques_top else '<div class="caixa" style="color:var(--sutil)">Nenhuma oportunidade encontrada nessa checagem (desconto ≥' + str(DESCONTO_MINIMO_OPORTUNIDADE) + '% na 2ª praça ou preço abaixo do limite da categoria).</div>'}
+  </div>
+
+  <div class="secao painel">
+    <div class="caixa">
+      <h3>Lotes por site</h3>
+      {barras_site}
+    </div>
+    <div class="caixa">
+      <h3>Por categoria</h3>
+      {chips_categoria}
+      <h3 style="margin-top:16px">Como funciona o alerta 🔥</h3>
+      <p style="font-size:12.5px;color:var(--sutil);line-height:1.6;margin:0">
+        Um lote vira "oportunidade" quando tem desconto de {DESCONTO_MINIMO_OPORTUNIDADE}%+ entre a 1ª e a 2ª praça,
+        ou preço abaixo do limite da categoria. Quando isso acontece num lote NOVO, chega notificação push
+        grátis via <a href="https://ntfy.sh/{NTFY_TOPIC}" target="_blank">ntfy</a> (tópico <code>{NTFY_TOPIC}</code>).
+      </p>
+    </div>
+  </div>
+
+  <div class="secao">
+    <h2>Todos os lotes</h2>
+    <div class="filtros">
+      <input type="text" id="filtroBusca" placeholder="🔎 buscar por título...">
+      <select id="filtroSite"><option value="">Todos os sites</option>{opcoes_site}</select>
+      <select id="filtroCategoria"><option value="">Todas as categorias</option>{opcoes_cat}</select>
+      <select id="ordenarPor">
+        <option value="padrao">Ordenar: padrão</option>
+        <option value="preco_asc">Menor preço</option>
+        <option value="preco_desc">Maior preço</option>
+        <option value="desconto_desc">Maior desconto</option>
+      </select>
+      <label class="pill" id="pillNovos"><input type="checkbox" id="filtroNovos"> só novidades</label>
+      <label class="pill" id="pillOportunidades"><input type="checkbox" id="filtroOportunidades"> 🔥 só oportunidades</label>
+    </div>
+    <div class="tabela-wrap">
+    <table id="tabela">
+    <thead><tr><th>Site</th><th>Categoria</th><th>Título</th><th>Preço</th><th>Desconto</th><th>Condição</th><th>Local</th><th>Link</th></tr></thead>
+    <tbody id="corpoTabela">
+    {''.join(linhas) if linhas else '<tr><td class="vazio" colspan="8">Nenhum lote encontrado nessa checagem.</td></tr>'}
+    </tbody>
+    </table>
+    </div>
+  </div>
+
+  <div class="rodape">
+    Monitor de leilões independente, sem vínculo com os sites listados · dados extraídos automaticamente, sempre confira o edital antes de decidir<br>
+    <a href="https://github.com/Joao-Viktor-Martins/monitor-leiloes" target="_blank">código-fonte no GitHub</a>
+  </div>
 </div>
-<table id="tabela">
-<tr><th>Site</th><th>Categoria</th><th>Título</th><th>Preço</th><th>Condição</th><th>Local</th><th>Link</th></tr>
-{''.join(linhas) if linhas else '<tr><td colspan="7">Nenhum lote encontrado nessa checagem.</td></tr>'}
-</table>
 <script>
-function filtrar() {{
+function aplicarFiltrosEOrdenacao() {{
+  var busca = document.getElementById('filtroBusca').value.trim().toLowerCase();
   var site = document.getElementById('filtroSite').value;
   var cat = document.getElementById('filtroCategoria').value;
   var soNovos = document.getElementById('filtroNovos').checked;
   var soOportunidades = document.getElementById('filtroOportunidades').checked;
-  var linhas = document.querySelectorAll('#tabela tr[data-site]');
+  var ordenar = document.getElementById('ordenarPor').value;
+
+  document.getElementById('pillNovos').classList.toggle('ativo', soNovos);
+  document.getElementById('pillOportunidades').classList.toggle('ativo', soOportunidades);
+
+  var corpo = document.getElementById('corpoTabela');
+  var linhas = Array.prototype.slice.call(corpo.querySelectorAll('tr[data-site]'));
+
   linhas.forEach(function(tr) {{
+    var mostraBusca = !busca || tr.getAttribute('data-titulo').indexOf(busca) !== -1;
     var mostraSite = !site || tr.getAttribute('data-site') === site;
     var mostraCat = !cat || tr.getAttribute('data-categoria') === cat;
     var mostraNovo = !soNovos || tr.getAttribute('data-novo') === '1';
     var mostraOport = !soOportunidades || tr.getAttribute('data-oportunidade') === '1';
-    tr.style.display = (mostraSite && mostraCat && mostraNovo && mostraOport) ? '' : 'none';
+    tr.style.display = (mostraBusca && mostraSite && mostraCat && mostraNovo && mostraOport) ? '' : 'none';
   }});
+
+  if (ordenar !== 'padrao') {{
+    linhas.sort(function(a, b) {{
+      if (ordenar === 'preco_asc') return parseFloat(a.getAttribute('data-preco')) - parseFloat(b.getAttribute('data-preco'));
+      if (ordenar === 'preco_desc') return parseFloat(b.getAttribute('data-preco')) - parseFloat(a.getAttribute('data-preco'));
+      if (ordenar === 'desconto_desc') return parseFloat(b.getAttribute('data-desconto')) - parseFloat(a.getAttribute('data-desconto'));
+      return 0;
+    }});
+    linhas.forEach(function(tr) {{ corpo.appendChild(tr); }});
+  }}
 }}
-document.getElementById('filtroSite').addEventListener('change', filtrar);
-document.getElementById('filtroCategoria').addEventListener('change', filtrar);
-document.getElementById('filtroNovos').addEventListener('change', filtrar);
-document.getElementById('filtroOportunidades').addEventListener('change', filtrar);
+['filtroBusca','filtroSite','filtroCategoria','filtroNovos','filtroOportunidades','ordenarPor'].forEach(function(id) {{
+  var el = document.getElementById(id);
+  el.addEventListener(id === 'filtroBusca' ? 'input' : 'change', aplicarFiltrosEOrdenacao);
+}});
 </script>
 </body></html>"""
-    REPORT_FILE.write_text(html, encoding="utf-8")
+    REPORT_FILE.write_text(documento, encoding="utf-8")
 
 
 def enviar_alerta_ntfy(oportunidades):
