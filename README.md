@@ -1,10 +1,13 @@
 # Monitor de Leilões — versão site (grátis, atualiza sozinho)
 
-Este projeto roda uma checagem semanal automática em 7 leiloeiros
+Este projeto roda uma checagem semanal automática em 11 leiloeiros
 brasileiros (veículos pelos modelos configurados + imóveis e bens diversos
-sem filtro) e publica o resultado como uma página web grátis, sem precisar
-de Python instalado no seu computador nem de você clicar em nada depois de
-configurado.
+sem filtro, com foco extra em São Paulo capital e interior) e publica o
+resultado como uma página web grátis, sem precisar de Python instalado no
+seu computador nem de você clicar em nada depois de configurado. Lotes que
+batem com os critérios de "boa oportunidade" (desconto grande na 2ª praça
+ou preço bem abaixo do normal) ficam marcados com 🔥 e disparam uma
+notificação push grátis no seu celular.
 
 Como funciona: o GitHub roda o `scraper.py` sozinho, no horário agendado
 (toda segunda), usando os servidores dele (não o seu PC). O resultado vira
@@ -81,6 +84,23 @@ Pronto — a partir daqui ele roda sozinho toda segunda, sem você precisar
 fazer nada.
 
 
+## Ativar a notificação push de "oportunidade" (grátis, sem conta)
+
+1. Instale o app **ntfy** no celular ([Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy) / [iPhone](https://apps.apple.com/app/ntfy/id1625396347)), ou simplesmente acesse pelo navegador do celular.
+2. Dentro do app, toque em **"+"** / "Subscribe to topic" e digite exatamente:
+   ```
+   leiloes-joao-c1c1d7f4
+   ```
+   (esse "tópico" já está configurado no `scraper.py`, na constante `NTFY_TOPIC` — não precisa mexer em nada).
+3. Pronto. Toda vez que o robô achar um lote novo que bate com os critérios de oportunidade (desconto de 40%+ na 2ª praça, ou preço abaixo do limite da categoria), você recebe uma notificação na hora, com os destaques.
+
+Não precisa criar conta em lugar nenhum — o ntfy funciona só com esse "código de canal". Só um detalhe: como não tem login, qualquer pessoa que souber esse código exato também consegue se inscrever nele — não é um problema de segurança sério pra esse uso (são só resultados de leilão público), mas se quiser mais privacidade dá pra trocar `NTFY_TOPIC` no `scraper.py` por outro código mais aleatório antes de subir pro GitHub.
+
+Pra ajustar quando conta como "oportunidade", edite no `scraper.py`:
+- `DESCONTO_MINIMO_OPORTUNIDADE` (padrão: 40%)
+- `LIMITES_OPORTUNIDADE_POR_CATEGORIA` (preço máximo por categoria pra contar como "barato")
+
+
 ## Editar os modelos de veículo procurados
 Abra `scraper.py`, procure a lista `MODELOS` perto do topo do arquivo, edite
 os nomes, suba o arquivo atualizado pro GitHub (Commit changes) — a próxima
@@ -96,7 +116,17 @@ rodada já usa a lista nova.
   você buscar manualmente no site.
 - Categorias de imóveis/bens diversos não têm filtro de preço/local — o
   volume pode ser grande; use os filtros da própria página (site/categoria/
-  só novidades) pra navegar.
+  só novidades/só oportunidades) pra navegar.
+- Alguns sites de leilão têm proteção anti-bot que pode redirecionar
+  tráfego de datacenter (como o do GitHub Actions) pra outro site — se um
+  site específico zerar direto sempre que roda no GitHub mas funcionar
+  normal no seu navegador, é provavelmente isso, não um bug do script.
+- Rico Leilões, Alfa Leilões e Savoy Leilões (fortes no interior de SP)
+  foram identificados mas não entraram no robô automático — exigem
+  navegação manual. Vale checar de vez em quando à mão.
+- A "oportunidade" é uma heurística (regra fixa), não uma avaliação real do
+  negócio — sempre confira o edital, comissão do leiloeiro e condição do
+  bem antes de decidir qualquer coisa.
 
 
 ## Rodando localmente (opcional, só pra testar antes de publicar)

@@ -9,7 +9,7 @@ Verifica vários leiloeiros brasileiros e marca quais lotes são NOVOS desde a
 última execução (o estado fica salvo em docs/dados_vistos.json e é
 commitado de volta no repositório a cada rodada pelo workflow do Actions).
 
-SITES COBERTOS (agosto/2026):
+SITES COBERTOS (agosto/2026) — 11 leiloeiros:
   - Sodré Santoro          -> veículos (busca por modelo)
   - VIP Leilões            -> veículos (busca por modelo)
   - Mega Leilões           -> veículos (busca por modelo) + imóveis (listagem completa)
@@ -17,6 +17,19 @@ SITES COBERTOS (agosto/2026):
   - Leilo.com.br           -> carros (filtrado por modelo) + imóveis + equipamentos (tudo)
   - Freitas Leiloeiro      -> veículos (filtrado por modelo) + imóveis + materiais (tudo)
   - Superbid Exchange      -> veículos (busca por modelo) + imóveis + diversos (tudo)
+  - Copart Brasil          -> veículos batidos/sinistrados (filtrado por modelo), pátios em SP e outros estados
+  - Sold Leilões           -> veículos (filtrado por modelo) + imóveis (tudo) — leiloeiro sediado em SP capital
+  - Damásio Leilões        -> veículos (filtrado por modelo) + imóveis + diversos (tudo) — Guaratinguetá/SP (interior)
+  - RMC Leilões            -> listagem geral (tudo, sem separação por categoria) — Campinas/SP (interior)
+
+Outros leiloeiros com forte atuação no interior de SP foram encontrados mas
+NÃO entraram no robô automático porque exigem navegação manual (ID de leilão
+específico, filtros só por clique, ou dados insuficientes pra confirmar o
+scraper): Rico Leilões (ricoleiloes.com.br, atua em Ribeirão Preto,
+Araraquara, São José dos Campos), Alfa Leilões (alfaleiloes.com, só imóveis,
+Ribeirão Preto/Bauru) e Savoy Leilões (savoyleiloes.com.br, veículos/sucata
+pra prefeituras do interior). Vale a pena checar esses de vez em quando à
+mão — se quiser, me chame que eu ajudo a automatizar algum deles depois.
 
 Categorias de VEÍCULOS são filtradas pelos modelos configurados em MODELOS
 abaixo (é o que você pediu originalmente: BMW 320i, Civic, Jetta, Golf,
@@ -24,6 +37,12 @@ Vectra, Lancer). Categorias de IMÓVEIS e BENS DIVERSOS/EQUIPAMENTOS/MATERIAIS
 NÃO têm filtro de preço/local — mostram tudo que os sites têm listado, como
 você pediu. Isso pode gerar bastante volume (centenas de itens); o relatório
 HTML tem filtros por site/categoria pra facilitar a navegação.
+
+ALERTA DE OPORTUNIDADE: o robô manda uma notificação push grátis (via
+ntfy.sh, sem precisar de conta) sempre que encontra um lote NOVO que bate
+com desconto de 40%+ entre 1ª e 2ª praça, ou preço abaixo do limite
+configurado pra categoria (ver LIMITES_OPORTUNIDADE_POR_CATEGORIA mais
+abaixo no código). Esses lotes também ficam marcados com 🔥 no site.
 
 USO LOCAL (opcional, pra testar antes de publicar):
     pip install -r requirements.txt
@@ -72,6 +91,7 @@ import argparse
 import json
 import re
 import sys
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -106,6 +126,12 @@ MODELOS = [
 # um lote, nos sites onde não dá pra buscar por termo (só listar tudo e
 # filtrar aqui no Python).
 TERMOS_CHAVE_MODELOS = ["320I", "CIVIC", "JETTA", "GOLF", "VECTRA", "LANCER", "BMW"]
+
+# Canal de notificação push gratuito (ntfy.sh, sem precisa de conta/login).
+# Instale o app "ntfy" (Android/iOS) ou acesse https://ntfy.sh/leiloes-joao-c1c1d7f4
+# no navegador do celular e "inscreva-se" (subscribe) nesse tópico pra
+# receber o alerta quando o robô achar uma oportunidade.
+NTFY_TOPIC = "leiloes-joao-c1c1d7f4"
 
 TIMEOUT = 30000  # ms
 
@@ -160,6 +186,69 @@ def extrair_campos_de_texto(texto):
     condicao = next((l for l in linhas if l.upper() in condicao_kw), "")
 
     return titulo, preco, local, condicao
+
+
+def calcular_desconto_praca(texto):
+    """Heurística pra achar 'desconto de praça': muitos leilões judiciais
+    mostram 2 valores no card (1ª praça, mais cara, depois 2ª praça, com
+    desconto). Pega o primeiro e o último valor em R$ que aparecem no texto
+    do card e calcula a queda percentual entre eles. Não é perfeito (alguns
+    sites mostram só 1 valor, ou valores em outra ordem), mas cobre os
+    formatos mais comuns (Sodré Santoro, Mega Leilões, Portal Zuk, Superbid)."""
+    valores = re.findall(r"R\$\s*([\d\.]+,\d{2})", texto)
+    if len(valores) < 2:
+        return None
+    try:
+        primeiro = float(valores[0].replace(".", "").replace(",", "."))
+        ultimo = float(valores[-1].replace(".", "").replace(",", "."))
+    except ValueError:
+        return None
+    if primeiro <= 0 or ultimo >= primeiro:
+        return None
+    return round((1 - ultimo / primeiro) * 100, 1)
+
+
+def parse_preco(preco_str):
+    """Converte uma string tipo 'R$ 63.000,00' ou '63.000,00' em float."""
+    if not preco_str:
+        return None
+    m = re.search(r"([\d\.]+),(\d{2})", preco_str)
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(".", "")) + float(m.group(2)) / 100
+    except ValueError:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# DETECÇÃO DE "BOA OPORTUNIDADE" — usado pro alerta (ntfy + destaque no
+# relatório). Critério (qualquer um dos dois já conta):
+#   (a) desconto de 40% ou mais entre 1ª e 2ª praça
+#   (b) preço abaixo do limite configurado pra categoria do lote
+# Ajuste os limites abaixo se quiser um filtro mais/menos sensível.
+# ---------------------------------------------------------------------------
+LIMITES_OPORTUNIDADE_POR_CATEGORIA = {
+    "Veículos": 15000,
+    "Carros": 15000,
+    "Imóveis": 150000,
+    "Diversos": 1000,
+    "Bens Diversos": 1000,
+    "Equipamentos": 3000,
+    "Materiais": 1000,
+}
+DESCONTO_MINIMO_OPORTUNIDADE = 40  # %
+
+
+def eh_oportunidade(item):
+    desconto = item.get("desconto_pct")
+    if desconto is not None and desconto >= DESCONTO_MINIMO_OPORTUNIDADE:
+        return True
+    preco = parse_preco(item.get("preco"))
+    limite = LIMITES_OPORTUNIDADE_POR_CATEGORIA.get(item.get("categoria"))
+    if preco is not None and limite is not None and 0 < preco <= limite:
+        return True
+    return False
 
 
 def dominio_ok(page, esperado):
@@ -222,6 +311,7 @@ def scrape_sodre(page, termo):
                 "condicao": condicao,
                 "local": local,
                 "url": href,
+                "desconto_pct": calcular_desconto_praca(texto),
             }
         )
     return itens
@@ -283,6 +373,7 @@ def scrape_vip(page, termo):
                 "condicao": "",
                 "local": lote_m.group(2) if lote_m else "",
                 "url": full,
+                "desconto_pct": calcular_desconto_praca(card_text),
             }
         )
     return itens
@@ -329,6 +420,7 @@ def scrape_mega(page, termo):
                 "condicao": status,
                 "local": local,
                 "url": None,  # busque pelo código (ex: ML06407/J13840) em megaleiloes.com.br
+                "desconto_pct": calcular_desconto_praca(bloco),
             }
         )
     return itens
@@ -368,6 +460,7 @@ def scrape_mega_categoria(page, url, categoria):
                 preco = m.group(0)
         if not titulo or len(titulo) < 5:
             continue
+        bloco = "\n".join(linhas[max(0, i - 6): min(len(linhas), i + 8)])
         itens.append(
             {
                 "site": "Mega Leilões",
@@ -379,6 +472,7 @@ def scrape_mega_categoria(page, url, categoria):
                 "condicao": "",
                 "local": local,
                 "url": None,
+                "desconto_pct": calcular_desconto_praca(bloco),
             }
         )
     return itens
@@ -426,9 +520,10 @@ def raspar_generico(page, cfg, termo=None):
             href = link.get_attribute("href")
         except Exception:
             continue
-        if not href or href in seen:
+        href_limpo = href[2:] if href.startswith("./") else href
+        if not href_limpo or href_limpo in seen:
             continue
-        seen.add(href)
+        seen.add(href_limpo)
         try:
             texto = link.inner_text()
         except Exception:
@@ -436,10 +531,10 @@ def raspar_generico(page, cfg, termo=None):
         if not texto or len(texto.strip()) < 8:
             continue
 
-        if href.startswith("http"):
-            full = href
+        if href_limpo.startswith("http"):
+            full = href_limpo
         else:
-            full = f"https://{dominio}" + (href if href.startswith("/") else f"/{href}")
+            full = f"https://{dominio}" + (href_limpo if href_limpo.startswith("/") else f"/{href_limpo}")
 
         titulo, preco, local, condicao = extrair_campos_de_texto(texto)
 
@@ -457,6 +552,7 @@ def raspar_generico(page, cfg, termo=None):
                 "condicao": condicao,
                 "local": local or "",
                 "url": full,
+                "desconto_pct": calcular_desconto_praca(texto),
             }
         )
         if len(itens) >= cfg.get("max_itens", 300):
@@ -539,6 +635,55 @@ SITES_GENERICO = [
         "link_sel": 'a[href*="/oferta/"]',
         "dominio_esperado": "superbid.net", "espera_ms": 1500,
     },
+    # --- Copart Brasil (veículos batidos/sinistrados, pátios em SP e outros estados) ---
+    {
+        "site": "Copart Brasil", "categoria": "Veículos", "tipo": "listagem_filtrada",
+        "url": "https://www.copart.com.br/lotSearchResults/?free=true&query=",
+        "link_sel": 'a[href^="./lot/"]',
+        "dominio_esperado": "copart.com.br", "espera_ms": 2500,
+    },
+    # --- Sold Leilões (marketplace Superbid, sede em SP) ---
+    {
+        "site": "Sold Leilões", "categoria": "Veículos", "tipo": "listagem_filtrada",
+        "url": "https://www.sold.com.br/categorias/carros-motos",
+        "link_sel": 'a[href^="/oferta/"]',
+        "dominio_esperado": "sold.com.br", "espera_ms": 2000,
+    },
+    {
+        "site": "Sold Leilões", "categoria": "Imóveis", "tipo": "listagem_completa",
+        "url": "https://www.sold.com.br/categorias/imoveis",
+        "link_sel": 'a[href^="/oferta/"]',
+        "dominio_esperado": "sold.com.br", "espera_ms": 4000,
+    },
+    # --- Damásio Leilões (Guaratinguetá/SP, interior — Vale do Paraíba) ---
+    {
+        "site": "Damásio Leilões", "categoria": "Veículos", "tipo": "listagem_filtrada",
+        "url": "https://www.damasioleiloes.com.br/lotes/veiculos",
+        "link_sel": 'a[href*="/item/"]',
+        "dominio_esperado": "damasioleiloes.com.br", "espera_ms": 2000,
+    },
+    {
+        "site": "Damásio Leilões", "categoria": "Imóveis", "tipo": "listagem_completa",
+        "url": "https://www.damasioleiloes.com.br/lotes/imoveis",
+        "link_sel": 'a[href*="/item/"]',
+        "dominio_esperado": "damasioleiloes.com.br", "espera_ms": 2000,
+    },
+    {
+        "site": "Damásio Leilões", "categoria": "Diversos", "tipo": "listagem_completa",
+        "url": "https://www.damasioleiloes.com.br/lotes/diversos",
+        "link_sel": 'a[href*="/item/"]',
+        "dominio_esperado": "damasioleiloes.com.br", "espera_ms": 2000,
+    },
+    # --- RMC Leilões (Campinas/SP, interior — infra Superbid). Categoria "geral"
+    # porque a listagem não separa por tipo na URL; confiança menor que os
+    # outros sites (seletor não confirmado 100%, é uma aposta baseada na
+    # mesma infraestrutura do Sold/Superbid).
+    {
+        "site": "RMC Leilões", "categoria": "Diversos", "tipo": "listagem_completa",
+        "url": "https://www.rmcleiloes.com.br/?searchType=opened&preOrderBy=orderByFirstOpenedOffers&pageNumber=1&pageSize=30&orderBy=endDate:asc",
+        "link_sel": 'a[href*="/oferta/"]',
+        "dominio_esperado": "rmcleiloes.com.br", "espera_ms": 2500,
+    },
 ]
 
 # Site com busca por termo funcional (Superbid): roda uma vez por modelo.
@@ -570,16 +715,23 @@ def gerar_relatorio_html(itens, novos_ids):
     sites = sorted({it["site"] for it in itens})
     categorias = sorted({it.get("categoria", "") for it in itens})
     novos_count = sum(1 for it in itens if f"{it['site']}|{it.get('categoria','')}|{it['id']}" in novos_ids)
+    oportunidades_count = sum(1 for it in itens if eh_oportunidade(it))
 
     linhas = []
     for it in itens:
         chave = f"{it['site']}|{it.get('categoria','')}|{it['id']}"
         eh_novo = chave in novos_ids
+        eh_oport = eh_oportunidade(it)
         link = f'<a href="{it["url"]}" target="_blank">abrir</a>' if it.get("url") else f'(busque "{it["id"]}" no site)'
-        badge = ' <span class="novo">NOVO</span>' if eh_novo else ""
+        badges = ""
+        if eh_oport:
+            badges += ' <span class="oportunidade">🔥 OPORTUNIDADE</span>'
+        if eh_novo:
+            badges += ' <span class="novo">NOVO</span>'
         linhas.append(
-            f'<tr data-site="{it["site"]}" data-categoria="{it.get("categoria","")}" data-novo="{"1" if eh_novo else "0"}">'
-            f"<td>{it['site']}</td><td>{it.get('categoria','')}</td><td>{it['titulo']}{badge}</td>"
+            f'<tr data-site="{it["site"]}" data-categoria="{it.get("categoria","")}" '
+            f'data-novo="{"1" if eh_novo else "0"}" data-oportunidade="{"1" if eh_oport else "0"}">'
+            f"<td>{it['site']}</td><td>{it.get('categoria','')}</td><td>{it['titulo']}{badges}</td>"
             f"<td>{it.get('preco') or '-'}</td><td>{it.get('condicao') or '-'}</td>"
             f"<td>{it.get('local') or '-'}</td><td>{link}</td>"
             "</tr>"
@@ -603,6 +755,7 @@ tr:hover {{ background:#fafafa; }}
 .filtros {{ margin-bottom:16px; display:flex; gap:12px; flex-wrap:wrap; }}
 .filtros select, .filtros label {{ padding:6px 10px; border-radius:6px; border:1px solid #ccc; font-size:14px; background:#fff; }}
 .novo {{ background:#e6f4ea; color:#1a7f37; font-size:11px; font-weight:600; padding:2px 6px; border-radius:4px; }}
+.oportunidade {{ background:#fff1e0; color:#b3540a; font-size:11px; font-weight:600; padding:2px 6px; border-radius:4px; }}
 @media (max-width: 700px) {{
   table, thead, tbody, th, td, tr {{ display:block; }}
   th {{ display:none; }}
@@ -613,11 +766,12 @@ tr:hover {{ background:#fafafa; }}
 </style></head>
 <body>
 <h1>Monitor de Leilões</h1>
-<div class="meta">Atualizado em {datetime.now().strftime('%d/%m/%Y %H:%M')} UTC · {len(itens)} lote(s) no total · {novos_count} novo(s) desde a última checagem · atualiza automaticamente toda semana</div>
+<div class="meta">Atualizado em {datetime.now().strftime('%d/%m/%Y %H:%M')} UTC · {len(itens)} lote(s) no total · {novos_count} novo(s) · 🔥 {oportunidades_count} oportunidade(s) (desconto ≥{DESCONTO_MINIMO_OPORTUNIDADE}% na 2ª praça ou preço abaixo do limite da categoria) · atualiza automaticamente toda semana</div>
 <div class="filtros">
   <select id="filtroSite"><option value="">Todos os sites</option>{opcoes_site}</select>
   <select id="filtroCategoria"><option value="">Todas as categorias</option>{opcoes_cat}</select>
   <label><input type="checkbox" id="filtroNovos"> só novidades</label>
+  <label><input type="checkbox" id="filtroOportunidades"> 🔥 só oportunidades</label>
 </div>
 <table id="tabela">
 <tr><th>Site</th><th>Categoria</th><th>Título</th><th>Preço</th><th>Condição</th><th>Local</th><th>Link</th></tr>
@@ -628,20 +782,57 @@ function filtrar() {{
   var site = document.getElementById('filtroSite').value;
   var cat = document.getElementById('filtroCategoria').value;
   var soNovos = document.getElementById('filtroNovos').checked;
+  var soOportunidades = document.getElementById('filtroOportunidades').checked;
   var linhas = document.querySelectorAll('#tabela tr[data-site]');
   linhas.forEach(function(tr) {{
     var mostraSite = !site || tr.getAttribute('data-site') === site;
     var mostraCat = !cat || tr.getAttribute('data-categoria') === cat;
     var mostraNovo = !soNovos || tr.getAttribute('data-novo') === '1';
-    tr.style.display = (mostraSite && mostraCat && mostraNovo) ? '' : 'none';
+    var mostraOport = !soOportunidades || tr.getAttribute('data-oportunidade') === '1';
+    tr.style.display = (mostraSite && mostraCat && mostraNovo && mostraOport) ? '' : 'none';
   }});
 }}
 document.getElementById('filtroSite').addEventListener('change', filtrar);
 document.getElementById('filtroCategoria').addEventListener('change', filtrar);
 document.getElementById('filtroNovos').addEventListener('change', filtrar);
+document.getElementById('filtroOportunidades').addEventListener('change', filtrar);
 </script>
 </body></html>"""
     REPORT_FILE.write_text(html, encoding="utf-8")
+
+
+def enviar_alerta_ntfy(oportunidades):
+    """Manda uma notificação push grátis via ntfy.sh (sem conta/login) quando
+    o robô acha lotes novos que batem com os critérios de 'boa oportunidade'.
+    Se o NTFY_TOPIC estiver vazio, ou der qualquer erro de rede, só loga e
+    segue — isso nunca deve derrubar a checagem inteira."""
+    if not oportunidades or not NTFY_TOPIC:
+        return
+    top = oportunidades[:5]
+    linhas = []
+    for it in top:
+        desconto = it.get("desconto_pct")
+        extra = f" (desconto {desconto:.0f}% na 2ª praça)" if desconto else ""
+        linhas.append(f"• [{it['site']}] {it['titulo']} — {it.get('preco') or '?'}{extra}")
+    corpo = "\n".join(linhas)
+    if len(oportunidades) > len(top):
+        corpo += f"\n… e mais {len(oportunidades) - len(top)} outra(s)."
+    titulo = f"🔥 {len(oportunidades)} oportunidade(s) nova(s) no Monitor de Leilões"
+    try:
+        req = urllib.request.Request(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data=corpo.encode("utf-8"),
+            headers={
+                "Title": titulo.encode("utf-8"),
+                "Priority": "high",
+                "Tags": "fire,moneybag",
+            },
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=10)
+        log(f"Alerta ntfy enviado: {len(oportunidades)} oportunidade(s).")
+    except Exception as e:
+        log(f"Não consegui enviar o alerta ntfy (seguindo sem travar): {e}")
 
 
 def main():
@@ -652,7 +843,7 @@ def main():
     vistos = carregar_vistos()
     todos = []
 
-    log(f"Checando {len(MODELOS)} modelos de veículo + (se --so-veiculos não for usado) imóveis/diversos em 7 leiloeiros...")
+    log(f"Checando {len(MODELOS)} modelos de veículo + (se --so-veiculos não for usado) imóveis/diversos em 11 leiloeiros...")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -733,7 +924,11 @@ def main():
     gerar_relatorio_html(todos, novos_ids)
     salvar_vistos(vistos)
 
+    oportunidades_novas = [it for it in novos if eh_oportunidade(it)]
+    enviar_alerta_ntfy(oportunidades_novas)
+
     log(f"Total encontrado: {len(todos)} | Novos desde a última vez: {len(novos)}")
+    log(f"Oportunidades novas (desconto ≥{DESCONTO_MINIMO_OPORTUNIDADE}% ou preço baixo): {len(oportunidades_novas)}")
     log(f"Relatório salvo em: {REPORT_FILE}")
 
 
