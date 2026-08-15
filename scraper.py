@@ -253,8 +253,24 @@ def parse_preco(preco_str):
 # ---------------------------------------------------------------------------
 # DETECÇÃO DE "BOA OPORTUNIDADE" — usado pro alerta (ntfy + destaque no
 # relatório). Critério (qualquer um dos dois já conta):
-#   (a) desconto de 40% ou mais entre 1ª e 2ª praça
+#   (a) desconto de 40% a 85% entre 1ª e 2ª praça (acima de 85% quase
+#       sempre é erro de extração — comparando dois valores que não são
+#       realmente "1ª praça vs 2ª praça" do mesmo lote — então isso NÃO
+#       conta como oportunidade sozinho, pra não gerar alerta falso)
 #   (b) preço abaixo do limite configurado pra categoria do lote
+#
+# Duas salvaguardas importantes pra evitar "oportunidade" que na prática é
+# só lata/sucata sem valor:
+#   - Em Veículos/Carros, os dois critérios só valem se o título do lote
+#     realmente bater com um dos MODELOS monitorados (bate_modelo). Alguns
+#     sites (ex: VIP Leilões) têm busca imprecisa e retornam moto/sucata
+#     barata mesmo buscando por "BMW 320i" — sem essa checagem, qualquer
+#     veículo barato virava "oportunidade" mesmo não sendo o que você quer.
+#   - Em Diversos/Bens Diversos/Equipamentos/Materiais (categorias sem
+#     filtro nenhum de conteúdo — mostram TUDO que o site lista), o
+#     critério de "preço baixo" sozinho é descartado: nessas categorias
+#     "barato" não indica nada, pode ser sucata mesmo. Só conta como
+#     oportunidade aí se tiver desconto de praça real e plausível.
 # Ajuste os limites abaixo se quiser um filtro mais/menos sensível.
 # ---------------------------------------------------------------------------
 LIMITES_OPORTUNIDADE_POR_CATEGORIA = {
@@ -267,16 +283,31 @@ LIMITES_OPORTUNIDADE_POR_CATEGORIA = {
     "Materiais": 1000,
 }
 DESCONTO_MINIMO_OPORTUNIDADE = 40  # %
+DESCONTO_MAXIMO_CONFIAVEL = 85  # % — acima disso, provavelmente é erro de extração, não desconto real
+CATEGORIAS_SEM_FILTRO_DE_CONTEUDO = ("Diversos", "Bens Diversos", "Equipamentos", "Materiais")
 
 
 def eh_oportunidade(item):
+    categoria = item.get("categoria")
+    titulo = item.get("titulo")
+    eh_veiculo = categoria in ("Veículos", "Carros")
+
+    # critério (a): desconto de praça — só numa faixa plausível
     desconto = item.get("desconto_pct")
-    if desconto is not None and desconto >= DESCONTO_MINIMO_OPORTUNIDADE:
-        return True
+    if desconto is not None and DESCONTO_MINIMO_OPORTUNIDADE <= desconto <= DESCONTO_MAXIMO_CONFIAVEL:
+        if not eh_veiculo or bate_modelo(titulo):
+            return True
+
+    # critério (b): preço abaixo do limite da categoria
     preco = parse_preco(item.get("preco"))
-    limite = LIMITES_OPORTUNIDADE_POR_CATEGORIA.get(item.get("categoria"))
+    limite = LIMITES_OPORTUNIDADE_POR_CATEGORIA.get(categoria)
     if preco is not None and limite is not None and 0 < preco <= limite:
+        if eh_veiculo:
+            return bate_modelo(titulo)
+        if categoria in CATEGORIAS_SEM_FILTRO_DE_CONTEUDO:
+            return False
         return True
+
     return False
 
 

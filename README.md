@@ -96,8 +96,23 @@ fazer nada.
 
 Não precisa criar conta em lugar nenhum — o ntfy funciona só com esse "código de canal". Só um detalhe: como não tem login, qualquer pessoa que souber esse código exato também consegue se inscrever nele — não é um problema de segurança sério pra esse uso (são só resultados de leilão público), mas se quiser mais privacidade dá pra trocar `NTFY_TOPIC` no `scraper.py` por outro código mais aleatório antes de subir pro GitHub.
 
+**Critério de oportunidade (revisado pra evitar "lata"):**
+- Desconto de 40% a 85% entre 1ª e 2ª praça — acima de 85% quase sempre é
+  erro de extração (comparando dois valores que não são realmente do
+  mesmo lote), então isso sozinho não conta como oportunidade.
+- OU preço abaixo do limite configurado pra categoria.
+- Em Veículos, os dois critérios só valem se o título bater com um dos
+  `MODELOS` monitorados — sem isso, motos/sucata baratas que aparecem por
+  busca imprecisa de algum site (ex: VIP Leilões retornando moto numa
+  busca por "BMW 320i") viravam "oportunidade" mesmo não sendo o carro
+  que você quer.
+- Em Diversos/Bens Diversos/Equipamentos/Materiais (categorias sem filtro
+  de conteúdo nenhum — mostram tudo que o site lista), "preço baixo"
+  sozinho não conta mais — só desconto de praça real. Nessas categorias
+  "barato" não indica qualidade nenhuma, pode ser sucata mesmo.
+
 Pra ajustar quando conta como "oportunidade", edite no `scraper.py`:
-- `DESCONTO_MINIMO_OPORTUNIDADE` (padrão: 40%)
+- `DESCONTO_MINIMO_OPORTUNIDADE` (padrão: 40%) e `DESCONTO_MAXIMO_CONFIAVEL` (padrão: 85%)
 - `LIMITES_OPORTUNIDADE_POR_CATEGORIA` (preço máximo por categoria pra contar como "barato")
 
 
