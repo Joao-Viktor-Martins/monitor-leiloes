@@ -811,6 +811,7 @@ def gerar_relatorio_html(itens, novos_ids):
 
     opcoes_site = "".join(f'<option value="{esc(s)}">{esc(s)}</option>' for s in sites)
     opcoes_cat = "".join(f'<option value="{esc(c)}">{esc(c)}</option>' for c in categorias)
+    chips_modelos = "".join(f'<button type="button" class="chip-modelo" data-modelo="{esc(m)}">{esc(m)}</button>' for m in MODELOS)
 
     documento = f"""<!DOCTYPE html>
 <html lang="pt-BR"><head><meta charset="UTF-8">
@@ -838,6 +839,17 @@ a {{ color:var(--laranja); }}
 .stat-card.novo .valor {{ color:var(--verde); }}
 .secao {{ margin-top:32px; }}
 .secao h2 {{ font-size:16px; margin:0 0 12px; display:flex; align-items:center; gap:8px; }}
+.busca-hero {{ background:var(--card); border:1px solid var(--borda); border-radius:14px; padding:20px 22px; box-shadow:0 4px 14px rgba(15,23,42,.06); }}
+.busca-hero h2 {{ margin-bottom:4px; }}
+.busca-hero-sub {{ color:var(--sutil); font-size:13px; margin:0 0 14px; }}
+.busca-hero-input {{ width:100%; padding:13px 16px; border-radius:10px; border:1.5px solid var(--borda); font-size:15.5px; background:#fbfbfc; }}
+.busca-hero-input:focus {{ outline:none; border-color:var(--laranja); background:#fff; }}
+.chips-modelo {{ display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }}
+.chip-modelo {{ background:#eef0f3; border:none; border-radius:20px; padding:6px 13px; font-size:12.5px; cursor:pointer; color:var(--texto); }}
+.chip-modelo:hover {{ background:#e2e5ea; }}
+.chip-modelo.ativo {{ background:var(--azul-escuro); color:#fff; }}
+.busca-hero-contador {{ margin-top:12px; font-size:13px; color:var(--sutil); }}
+.busca-hero-contador a {{ font-weight:600; }}
 .grid-destaques {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:14px; }}
 .card-oport {{ background:var(--card); border:1px solid var(--borda); border-left:4px solid var(--laranja); border-radius:10px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,.05); display:flex; flex-direction:column; gap:6px; }}
 .card-oport-topo {{ display:flex; justify-content:space-between; align-items:center; }}
@@ -900,6 +912,14 @@ tbody tr:hover {{ background:#fafbfc; }}
     <div class="stat-card oportunidade"><div class="valor">🔥 {oportunidades_count}</div><div class="rotulo">oportunidades ativas</div></div>
     <div class="stat-card"><div class="valor">{len(sites)}</div><div class="rotulo">sites ativos</div></div>
     <div class="stat-card"><div class="valor">{len(categorias)}</div><div class="rotulo">categorias</div></div>
+  </div>
+
+  <div class="secao busca-hero">
+    <h2>🔎 Procurar um modelo de veículo</h2>
+    <p class="busca-hero-sub">Digite qualquer modelo (não só os que já são monitorados automaticamente) pra filtrar todos os lotes na hora.</p>
+    <input type="text" id="buscaModeloTopo" class="busca-hero-input" placeholder="ex: BMW 320i, Civic, Corolla, Onix...">
+    <div class="chips-modelo">{chips_modelos}</div>
+    <div id="contadorBuscaModelo" class="busca-hero-contador"></div>
   </div>
 
   <div class="secao">
@@ -968,6 +988,7 @@ function aplicarFiltrosEOrdenacao() {{
 
   var corpo = document.getElementById('corpoTabela');
   var linhas = Array.prototype.slice.call(corpo.querySelectorAll('tr[data-site]'));
+  var visiveis = 0;
 
   linhas.forEach(function(tr) {{
     var mostraBusca = !busca || tr.getAttribute('data-titulo').indexOf(busca) !== -1;
@@ -975,7 +996,9 @@ function aplicarFiltrosEOrdenacao() {{
     var mostraCat = !cat || tr.getAttribute('data-categoria') === cat;
     var mostraNovo = !soNovos || tr.getAttribute('data-novo') === '1';
     var mostraOport = !soOportunidades || tr.getAttribute('data-oportunidade') === '1';
-    tr.style.display = (mostraBusca && mostraSite && mostraCat && mostraNovo && mostraOport) ? '' : 'none';
+    var mostra = mostraBusca && mostraSite && mostraCat && mostraNovo && mostraOport;
+    tr.style.display = mostra ? '' : 'none';
+    if (mostra) visiveis++;
   }});
 
   if (ordenar !== 'padrao') {{
@@ -987,10 +1010,40 @@ function aplicarFiltrosEOrdenacao() {{
     }});
     linhas.forEach(function(tr) {{ corpo.appendChild(tr); }});
   }}
+
+  var buscaTopo = document.getElementById('buscaModeloTopo');
+  var contador = document.getElementById('contadorBuscaModelo');
+  if (buscaTopo.value.trim()) {{
+    contador.innerHTML = visiveis
+      ? visiveis + ' lote(s) encontrado(s) para "' + buscaTopo.value.trim() + '" — <a href="#tabela">ver na tabela ↓</a>'
+      : 'Nenhum lote encontrado para "' + buscaTopo.value.trim() + '" nessa checagem.';
+  }} else {{
+    contador.innerHTML = '';
+  }}
 }}
+
 ['filtroBusca','filtroSite','filtroCategoria','filtroNovos','filtroOportunidades','ordenarPor'].forEach(function(id) {{
   var el = document.getElementById(id);
   el.addEventListener(id === 'filtroBusca' ? 'input' : 'change', aplicarFiltrosEOrdenacao);
+}});
+
+// busca em destaque no topo: filtra a tabela inteira em tempo real por
+// título (não trava em nenhuma categoria — funciona pra qualquer modelo,
+// mesmo um que não esteja na lista monitorada automaticamente)
+var buscaModeloTopo = document.getElementById('buscaModeloTopo');
+buscaModeloTopo.addEventListener('input', function() {{
+  document.getElementById('filtroBusca').value = buscaModeloTopo.value;
+  document.querySelectorAll('.chip-modelo').forEach(function(chip) {{
+    chip.classList.toggle('ativo', chip.getAttribute('data-modelo').toLowerCase() === buscaModeloTopo.value.trim().toLowerCase());
+  }});
+  aplicarFiltrosEOrdenacao();
+}});
+document.querySelectorAll('.chip-modelo').forEach(function(chip) {{
+  chip.addEventListener('click', function() {{
+    var modelo = chip.getAttribute('data-modelo');
+    buscaModeloTopo.value = (buscaModeloTopo.value.trim().toLowerCase() === modelo.toLowerCase()) ? '' : modelo;
+    buscaModeloTopo.dispatchEvent(new Event('input'));
+  }});
 }});
 </script>
 </body></html>"""
