@@ -31,6 +31,13 @@ Ribeirão Preto/Bauru) e Savoy Leilões (savoyleiloes.com.br, veículos/sucata
 pra prefeituras do interior). Vale a pena checar esses de vez em quando à
 mão — se quiser, me chame que eu ajudo a automatizar algum deles depois.
 
+SITES PERSONALIZADOS: além dos 11 acima, dá pra adicionar qualquer outro
+leiloeiro só editando a lista SITES_PERSONALIZADOS (mais abaixo neste
+arquivo) — não precisa de seletor CSS nem conhecimento técnico, só nome e
+link. O robô tenta detectar sozinho os lotes daquele site (modo
+"melhor esforço" — ver comentário ao lado da lista pra detalhes e
+limitações). Veja o README pra instruções completas.
+
 Categorias de VEÍCULOS são filtradas pelos modelos configurados em MODELOS
 abaixo (é o que você pediu originalmente: BMW 320i, Civic, Jetta, Golf,
 Vectra, Lancer). Categorias de IMÓVEIS e BENS DIVERSOS/EQUIPAMENTOS/MATERIAIS
@@ -95,7 +102,7 @@ import sys
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 try:
     from playwright.sync_api import sync_playwright
@@ -133,6 +140,27 @@ TERMOS_CHAVE_MODELOS = ["320I", "CIVIC", "JETTA", "GOLF", "VECTRA", "LANCER", "B
 # no navegador do celular e "inscreva-se" (subscribe) nesse tópico pra
 # receber o alerta quando o robô achar uma oportunidade.
 NTFY_TOPIC = "leiloes-joao-c1c1d7f4"
+
+# ---------------------------------------------------------------------------
+# SITES PERSONALIZADOS — adicione aqui qualquer leiloeiro que quiser
+# acompanhar, sem precisar mexer em mais nada no código. Só "nome" e "url"
+# são obrigatórios; "categoria" é opcional (padrão "Diversos" = mostra tudo,
+# sem filtro; use "Veículos" pra filtrar pelos MODELOS acima).
+#
+# Exemplo:
+# SITES_PERSONALIZADOS = [
+#     {"nome": "Nome do Leiloeiro", "url": "https://site.com.br/lotes-abertos", "categoria": "Diversos"},
+#     {"nome": "Outro Leiloeiro (só carros)", "url": "https://outro.com.br/veiculos", "categoria": "Veículos"},
+# ]
+#
+# Como funciona: o robô visita a página e tenta detectar sozinho quais
+# links são de lote (procura um preço "R$" perto de cada link). É
+# "melhor esforço" — funciona bem em sites com listagem simples, mas pode
+# trazer pouco (ou nada) em sites muito carregados de JavaScript, ou por
+# engano incluir algum link que não é de lote nenhum. Se um site aqui não
+# funcionar bem, me manda o link no chat que eu configuro ele com um
+# seletor dedicado (fica mais confiável que o modo automático).
+SITES_PERSONALIZADOS = []
 
 TIMEOUT = 30000  # ms
 
@@ -558,6 +586,99 @@ def raspar_generico(page, cfg, termo=None):
         )
         if len(itens) >= cfg.get("max_itens", 300):
             break
+    return itens
+
+
+def raspar_auto_deteccao(page, cfg):
+    """Motor 'auto-detect' pros sites que você mesmo adicionar em
+    SITES_PERSONALIZADOS (só nome + link, sem selector nenhum). Varre todos
+    os links da página e, pra cada um, sobe até 6 níveis de elemento pai
+    procurando um preço "R$" por perto — se achar, considera que aquilo é
+    um card de lote. É "melhor esforço": funciona bem em sites com
+    listagem simples, mas pode trazer pouco (ou nada) em sites muito
+    carregados de JavaScript, ou por engano incluir algum link que não é
+    de lote nenhum. Se um site aqui não funcionar bem, me manda o link no
+    chat que eu configuro ele com um seletor dedicado."""
+    url = cfg["url"]
+    nome = cfg["nome"]
+    categoria = cfg.get("categoria") or "Diversos"
+    esperado = urlparse(url).netloc.replace("www.", "")
+    itens = []
+
+    try:
+        page.goto(url, timeout=TIMEOUT)
+        page.wait_for_timeout(cfg.get("espera_ms", 2500))
+        if not dominio_ok(page, esperado):
+            log(f"   [{nome} (personalizado)] saiu do domínio esperado — pulando")
+            return itens
+    except Exception as e:
+        log(f"   [{nome} (personalizado)] erro ao carregar: {e}")
+        return itens
+
+    try:
+        candidatos = page.evaluate(
+            """
+            () => {
+                const out = [];
+                const seen = new Set();
+                const anchors = Array.from(document.querySelectorAll('a[href]'));
+                for (const a of anchors) {
+                    const href = a.getAttribute('href');
+                    if (!href || href.startsWith('#') || href.toLowerCase().startsWith('javascript:')) continue;
+                    if (seen.has(href)) continue;
+                    let node = a, texto = '';
+                    for (let i = 0; i < 6 && node; i++) {
+                        const tag = node.tagName;
+                        if (tag === 'BODY' || tag === 'HTML') { texto = ''; break; } // nunca aceita a página inteira como se fosse 1 card
+                        texto = node.innerText || '';
+                        if (texto.length > 800) { texto = ''; break; } // ancestor grande demais pra ser 1 card
+                        if (texto.includes('R$')) break;
+                        node = node.parentElement;
+                    }
+                    if (!texto.includes('R$') || texto.trim().length < 8) continue;
+                    seen.add(href);
+                    out.push({href: href, texto: texto.slice(0, 600)});
+                    if (out.length >= 400) break;
+                }
+                return out;
+            }
+            """
+        )
+    except Exception as e:
+        log(f"   [{nome} (personalizado)] erro ao varrer a página: {e}")
+        return itens
+
+    dominio_atual = urlparse(page.url).netloc
+    for c in candidatos:
+        href = c.get("href") or ""
+        texto = c.get("texto") or ""
+        if href.startswith("http"):
+            full = href
+        else:
+            full = f"https://{dominio_atual}" + (href if href.startswith("/") else f"/{href}")
+
+        titulo, preco, local, condicao = extrair_campos_de_texto(texto)
+        if categoria in ("Veículos", "Carros") and not bate_modelo(titulo):
+            continue
+
+        itens.append(
+            {
+                "site": f"{nome} (personalizado)",
+                "categoria": categoria,
+                "termo": "",
+                "id": full,
+                "titulo": titulo or nome,
+                "preco": preco,
+                "condicao": condicao,
+                "local": local or "",
+                "url": full,
+                "desconto_pct": calcular_desconto_praca(texto),
+            }
+        )
+        if len(itens) >= cfg.get("max_itens", 80):
+            break
+
+    log(f"   [{nome} (personalizado)] {len(itens)} lote(s) detectado(s) automaticamente")
     return itens
 
 
@@ -1092,7 +1213,8 @@ def main():
     vistos = carregar_vistos()
     todos = []
 
-    log(f"Checando {len(MODELOS)} modelos de veículo + (se --so-veiculos não for usado) imóveis/diversos em 11 leiloeiros...")
+    extra_personalizados = f" + {len(SITES_PERSONALIZADOS)} site(s) personalizado(s)" if SITES_PERSONALIZADOS else ""
+    log(f"Checando {len(MODELOS)} modelos de veículo + (se --so-veiculos não for usado) imóveis/diversos em 11 leiloeiros{extra_personalizados}...")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -1159,6 +1281,16 @@ def main():
                     log(f"   erro em {cfg['site']}/{cfg['categoria']}: {e}")
                     itens = []
                 todos.extend(itens)
+
+        # --- Sites personalizados (você adiciona, o robô tenta detectar sozinho) ---
+        for cfg in SITES_PERSONALIZADOS:
+            log(f"-> {cfg.get('nome','(sem nome)')} (personalizado, auto-detect)")
+            try:
+                itens = raspar_auto_deteccao(page, cfg)
+            except Exception as e:
+                log(f"   erro em {cfg.get('nome','(sem nome)')} (personalizado): {e}")
+                itens = []
+            todos.extend(itens)
 
         browser.close()
 

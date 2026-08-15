@@ -107,6 +107,35 @@ os nomes, suba o arquivo atualizado pro GitHub (Commit changes) — a próxima
 rodada já usa a lista nova.
 
 
+## Adicionar você mesmo um novo leiloeiro (sem precisar de código)
+Além dos 11 sites já configurados, dá pra adicionar qualquer outro
+leiloeiro editando a lista `SITES_PERSONALIZADOS` perto do topo do
+`scraper.py`. Só precisa de nome e link — nada de seletor CSS nem
+conhecimento técnico:
+
+```python
+SITES_PERSONALIZADOS = [
+    {"nome": "Nome do Leiloeiro", "url": "https://site.com.br/lotes-abertos", "categoria": "Diversos"},
+    {"nome": "Outro Leiloeiro (só carros)", "url": "https://outro.com.br/veiculos", "categoria": "Veículos"},
+]
+```
+
+- `categoria` é opcional. Deixe em branco (ou "Diversos") pra mostrar tudo
+  sem filtro, ou use `"Veículos"` pra filtrar automaticamente pelos
+  `MODELOS` configurados acima.
+- O robô visita a página sozinho e tenta detectar quais links são de lote
+  (procura um preço "R$" perto de cada link). É "melhor esforço": funciona
+  bem em sites com listagem simples, mas pode trazer pouco (ou nada) em
+  sites muito carregados de JavaScript, ou por engano incluir algum link
+  que não é de lote nenhum.
+- Depois de editar, suba o `scraper.py` atualizado pro GitHub (Commit
+  changes) e, se quiser ver o resultado na hora, dispare a checagem manual
+  pela aba Actions (veja o passo 5 lá em cima).
+- Se um site que você adicionar não funcionar bem no modo automático, me
+  manda o link aqui no chat que eu configuro ele com um seletor dedicado
+  (fica bem mais confiável que o modo automático).
+
+
 ## Limitações (as mesmas da versão local)
 - O layout de cada site pode mudar a qualquer momento — se algum site parar
   de trazer resultado, o robô não trava, só pula ele e segue os outros.
