@@ -1,183 +1,65 @@
-# Monitor de Leilões — versão site (grátis, atualiza sozinho)
+# 🔨 Monitor de Leilões
 
-Este projeto roda uma checagem semanal automática em 11 leiloeiros
-brasileiros (veículos pelos modelos configurados + imóveis e bens diversos
-sem filtro, com foco extra em São Paulo capital e interior) e publica o
-resultado como uma página web grátis, sem precisar de Python instalado no
-seu computador nem de você clicar em nada depois de configurado. Lotes que
-batem com os critérios de "boa oportunidade" (desconto grande na 2ª praça
-ou preço bem abaixo do normal) ficam marcados com 🔥 e disparam uma
-notificação push grátis no seu celular.
+Robô que verifica automaticamente lotes em 11 leiloeiros brasileiros (veículos, imóveis e bens diversos), identifica oportunidades reais com base em regras de desconto e preço, e publica os resultados em uma página web pública — sem custo de servidor e sem intervenção manual.
 
-Como funciona: o GitHub roda o `scraper.py` sozinho, no horário agendado
-(toda segunda), usando os servidores dele (não o seu PC). O resultado vira
-a página `docs/index.html`, publicada automaticamente em um link tipo:
+## O que o projeto faz
 
-```
-https://SEU-USUARIO.github.io/monitor-leiloes/
-```
+- Executa uma varredura semanal automatizada (agendada via GitHub Actions, sem depender de um computador ligado).
+- Faz web scraping de 11 sites de leilão diferentes, cada um com estrutura própria de HTML.
+- Aplica uma heurística de "oportunidade" (desconto entre 1a e 2a praça, ou preço abaixo de um limite por categoria) para filtrar ruído.
+- Publica o resultado automaticamente como um site estático (GitHub Pages), atualizado a cada execução.
+- Envia notificações push gratuitas (via ntfy) quando encontra um lote que bate com os critérios configurados.
+- Permite adicionar novos sites de leilão sem escrever código, apenas configurando nome e URL.
 
-Não é um domínio .com personalizado (isso custaria dinheiro), mas é um link
-real, sempre no ar, que funciona no celular e em qualquer navegador.
+## Stack técnica
 
+- Python (scraping, regras de negócio, geração de HTML)
+- GitHub Actions (agendamento e execução automática, sem servidor próprio)
+- GitHub Pages (publicação do resultado como site estático)
+- Playwright (para sites que exigem renderização de JavaScript)
+- ntfy (notificações push sem necessidade de conta)
 
-## Passo a passo pra publicar (uns 10 minutos, só na primeira vez)
+## Por que fiz esse projeto
 
-### 1. Criar uma conta no GitHub (se ainda não tiver)
-Vá em **github.com** → "Sign up" → siga o cadastro (é grátis, só precisa de
-um e-mail). Esse passo é seu — eu não posso criar contas por você.
+Queria acompanhar oportunidades reais em leilões (veículos e imóveis) sem precisar checar manualmente dezenas de sites toda semana. O projeto resolve isso de ponta a ponta: coleta, filtra, publica e avisa, tudo rodando sozinho na nuvem, de graça.
 
-### 2. Criar um repositório novo
-- Clique no `+` no canto superior direito → **"New repository"**.
-- Nome: `monitor-leiloes` (pode ser outro nome, só lembre que o link do site
-  vai usar esse nome).
-- Deixe como **Public** (repositório privado não consegue publicar no
-  GitHub Pages gratuito).
-- Não marque nenhuma opção de "adicionar README" — vamos subir os arquivos
-  já prontos.
-- Clique em **"Create repository"**.
+---
 
-### 3. Subir os arquivos deste pacote
-Na página do repositório recém-criado, clique no link **"uploading an
-existing file"** (ou "adicionar arquivo" → "fazer upload de arquivos").
-Arraste TODOS os arquivos e pastas deste pacote pra lá, mantendo a
-estrutura de pastas:
+## Como publicar sua própria versão
 
-```
-scraper.py
-requirements.txt
-README.md
-docs/index.html
-docs/dados_vistos.json
-.github/workflows/checar-leiloes.yml
-```
+1. Crie um repositório público no GitHub e suba os arquivos deste projeto (scraper.py, requirements.txt, docs/, .github/workflows/).
+2. Em Settings > Pages, configure o deploy a partir da branch main, pasta /docs.
+3. Rode manualmente pela aba Actions > Checar leiloes > Run workflow para gerar o primeiro resultado.
+4. (Opcional) Instale o app ntfy e inscreva-se no tópico configurado em NTFY_TOPIC no scraper.py para receber notificações.
 
-Atenção: o GitHub às vezes esconde a pasta `.github` no arrastar-e-soltar
-do navegador. Se isso acontecer, use o modo "upload files" e arraste a
-pasta `.github` separadamente, ou (mais confiável) instale o **GitHub
-Desktop** (app gratuito) e publique a pasta inteira por ele — é só abrir o
-GitHub Desktop, "Add Local Repository", escolher esta pasta, e "Publish
-repository".
+A partir daí, o robô roda sozinho toda segunda-feira.
 
-Depois de subir tudo, clique em **"Commit changes"**.
+### Critério de oportunidade
 
-### 4. Ativar o GitHub Pages
-- No repositório, vá em **Settings** (aba no topo) → **Pages** (menu da
-  esquerda).
-- Em "Build and deployment" → "Source", escolha **"Deploy from a branch"**.
-- Em "Branch", escolha **main** e a pasta **/docs**, depois **Save**.
-- Espere 1-2 minutos. O GitHub vai te mostrar o link do site (algo como
-  `https://seu-usuario.github.io/monitor-leiloes/`).
+- Desconto de 40% a 85% entre 1a e 2a praça (acima disso costuma ser erro de extração, não oportunidade real).
+- Ou preço abaixo do limite configurado por categoria.
+- Em Veículos, só conta se o título bater com um dos modelos monitorados.
+- Em categorias sem filtro de conteúdo (Diversos, Bens Diversos), preço baixo sozinho não conta, só desconto de praça real.
 
-### 5. Rodar a primeira checagem
-Por padrão, o robô só roda automaticamente toda segunda-feira. Pra ver o
-resultado de verdade agora, dispare manualmente:
-- Vá na aba **Actions** do repositório.
-- Clique em **"Checar leilões"** na lista da esquerda.
-- Clique no botão **"Run workflow"** → **"Run workflow"** de novo pra
-  confirmar.
-- Espere uns 3-8 minutos (ele está checando 7 sites de verdade). Quando o
-  círculo ficar verde ✅, atualize a página do seu site — os resultados vão
-  estar lá.
+### Personalização
 
-Pronto — a partir daqui ele roda sozinho toda segunda, sem você precisar
-fazer nada.
+- Editar modelos de veículo monitorados: lista MODELOS no topo de scraper.py.
+- Adicionar um novo leiloeiro sem código: lista SITES_PERSONALIZADOS no topo de scraper.py (nome, URL e categoria opcional).
+- Ajustar limites de desconto/preço: constantes DESCONTO_MINIMO_OPORTUNIDADE, DESCONTO_MAXIMO_CONFIAVEL e LIMITES_OPORTUNIDADE_POR_CATEGORIA.
 
+### Rodando localmente (opcional)
 
-## Ativar a notificação push de "oportunidade" (grátis, sem conta)
-
-1. Instale o app **ntfy** no celular ([Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy) / [iPhone](https://apps.apple.com/app/ntfy/id1625396347)), ou simplesmente acesse pelo navegador do celular.
-2. Dentro do app, toque em **"+"** / "Subscribe to topic" e digite exatamente:
-   ```
-   leiloes-joao-c1c1d7f4
-   ```
-   (esse "tópico" já está configurado no `scraper.py`, na constante `NTFY_TOPIC` — não precisa mexer em nada).
-3. Pronto. Toda vez que o robô achar um lote novo que bate com os critérios de oportunidade (desconto de 40%+ na 2ª praça, ou preço abaixo do limite da categoria), você recebe uma notificação na hora, com os destaques.
-
-Não precisa criar conta em lugar nenhum — o ntfy funciona só com esse "código de canal". Só um detalhe: como não tem login, qualquer pessoa que souber esse código exato também consegue se inscrever nele — não é um problema de segurança sério pra esse uso (são só resultados de leilão público), mas se quiser mais privacidade dá pra trocar `NTFY_TOPIC` no `scraper.py` por outro código mais aleatório antes de subir pro GitHub.
-
-**Critério de oportunidade (revisado pra evitar "lata"):**
-- Desconto de 40% a 85% entre 1ª e 2ª praça — acima de 85% quase sempre é
-  erro de extração (comparando dois valores que não são realmente do
-  mesmo lote), então isso sozinho não conta como oportunidade.
-- OU preço abaixo do limite configurado pra categoria.
-- Em Veículos, os dois critérios só valem se o título bater com um dos
-  `MODELOS` monitorados — sem isso, motos/sucata baratas que aparecem por
-  busca imprecisa de algum site (ex: VIP Leilões retornando moto numa
-  busca por "BMW 320i") viravam "oportunidade" mesmo não sendo o carro
-  que você quer.
-- Em Diversos/Bens Diversos/Equipamentos/Materiais (categorias sem filtro
-  de conteúdo nenhum — mostram tudo que o site lista), "preço baixo"
-  sozinho não conta mais — só desconto de praça real. Nessas categorias
-  "barato" não indica qualidade nenhuma, pode ser sucata mesmo.
-
-Pra ajustar quando conta como "oportunidade", edite no `scraper.py`:
-- `DESCONTO_MINIMO_OPORTUNIDADE` (padrão: 40%) e `DESCONTO_MAXIMO_CONFIAVEL` (padrão: 85%)
-- `LIMITES_OPORTUNIDADE_POR_CATEGORIA` (preço máximo por categoria pra contar como "barato")
-
-
-## Editar os modelos de veículo procurados
-Abra `scraper.py`, procure a lista `MODELOS` perto do topo do arquivo, edite
-os nomes, suba o arquivo atualizado pro GitHub (Commit changes) — a próxima
-rodada já usa a lista nova.
-
-
-## Adicionar você mesmo um novo leiloeiro (sem precisar de código)
-Além dos 11 sites já configurados, dá pra adicionar qualquer outro
-leiloeiro editando a lista `SITES_PERSONALIZADOS` perto do topo do
-`scraper.py`. Só precisa de nome e link — nada de seletor CSS nem
-conhecimento técnico:
-
-```python
-SITES_PERSONALIZADOS = [
-    {"nome": "Nome do Leiloeiro", "url": "https://site.com.br/lotes-abertos", "categoria": "Diversos"},
-    {"nome": "Outro Leiloeiro (só carros)", "url": "https://outro.com.br/veiculos", "categoria": "Veículos"},
-]
-```
-
-- `categoria` é opcional. Deixe em branco (ou "Diversos") pra mostrar tudo
-  sem filtro, ou use `"Veículos"` pra filtrar automaticamente pelos
-  `MODELOS` configurados acima.
-- O robô visita a página sozinho e tenta detectar quais links são de lote
-  (procura um preço "R$" perto de cada link). É "melhor esforço": funciona
-  bem em sites com listagem simples, mas pode trazer pouco (ou nada) em
-  sites muito carregados de JavaScript, ou por engano incluir algum link
-  que não é de lote nenhum.
-- Depois de editar, suba o `scraper.py` atualizado pro GitHub (Commit
-  changes) e, se quiser ver o resultado na hora, dispare a checagem manual
-  pela aba Actions (veja o passo 5 lá em cima).
-- Se um site que você adicionar não funcionar bem no modo automático, me
-  manda o link aqui no chat que eu configuro ele com um seletor dedicado
-  (fica bem mais confiável que o modo automático).
-
-
-## Limitações (as mesmas da versão local)
-- O layout de cada site pode mudar a qualquer momento — se algum site parar
-  de trazer resultado, o robô não trava, só pula ele e segue os outros.
-- Alguns sites não têm busca por palavra-chave funcional pra veículos; o
-  script baixa a listagem geral e filtra pelos modelos configurados.
-- Mega Leilões não expõe link direto por lote — mostra o código do lote pra
-  você buscar manualmente no site.
-- Categorias de imóveis/bens diversos não têm filtro de preço/local — o
-  volume pode ser grande; use os filtros da própria página (site/categoria/
-  só novidades/só oportunidades) pra navegar.
-- Alguns sites de leilão têm proteção anti-bot que pode redirecionar
-  tráfego de datacenter (como o do GitHub Actions) pra outro site — se um
-  site específico zerar direto sempre que roda no GitHub mas funcionar
-  normal no seu navegador, é provavelmente isso, não um bug do script.
-- Rico Leilões, Alfa Leilões e Savoy Leilões (fortes no interior de SP)
-  foram identificados mas não entraram no robô automático — exigem
-  navegação manual. Vale checar de vez em quando à mão.
-- A "oportunidade" é uma heurística (regra fixa), não uma avaliação real do
-  negócio — sempre confira o edital, comissão do leiloeiro e condição do
-  bem antes de decidir qualquer coisa.
-
-
-## Rodando localmente (opcional, só pra testar antes de publicar)
-```
+```bash
 pip install -r requirements.txt
 playwright install chromium
 python scraper.py
 ```
-Isso gera `docs/index.html` — abra esse arquivo no navegador pra conferir
-antes de subir pro GitHub.
+
+Isso gera docs/index.html, abra o arquivo no navegador para conferir antes de publicar.
+
+### Limitações conhecidas
+
+- Layouts de sites de terceiros podem mudar a qualquer momento; o robô ignora falhas pontuais e segue com os demais sites.
+- Alguns sites de leilão têm proteção anti-bot que pode bloquear tráfego de datacenter (ex: GitHub Actions) sem bloquear navegação normal.
+- A "oportunidade" é uma heurística, não uma avaliação de negócio, sempre confira edital, comissão do leiloeiro e condição do bem antes de decidir.
+
